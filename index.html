@@ -2,193 +2,219 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>北鉄バス 運転シミュレーター (金沢駅〜香林坊)</title>
+    <title>北鉄バス 運転席シミュレーター (金沢駅〜香林坊)</title>
     <style>
-        body { margin: 0; background: #333; font-family: 'Helvetica Neue', Arial, sans-serif; overflow: hidden; color: white; }
-        #game-container { position: relative; width: 100vw; height: 100vh; display: flex; flex-direction: column; align-items: center; }
-        canvas { background: #555; box-shadow: 0 0 20px rgba(0,0,0,0.5); cursor: none; }
-        #ui { position: absolute; top: 20px; left: 20px; background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px; border-left: 5px solid #e60012; }
-        .info { font-size: 18px; margin-bottom: 5px; }
-        .dest { font-size: 24px; font-weight: bold; color: #ffcc00; }
-        #controls { position: absolute; bottom: 20px; right: 20px; background: rgba(0,0,0,0.7); padding: 10px; font-size: 14px; border-radius: 5px; }
-        #message { position: absolute; top: 40%; width: 100%; text-align: center; font-size: 40px; font-weight: bold; color: #fff; text-shadow: 2px 2px 4px #000; pointer-events: none; }
+        body { margin: 0; background: #000; font-family: 'Hiragino Kaku Gothic ProN', sans-serif; overflow: hidden; color: white; }
+        #game-container { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
+        canvas { display: block; width: 100%; height: 100%; }
+        
+        /* 運転席の計器類 UI */
+        #cockpit-ui {
+            position: absolute; bottom: 0; width: 100%; height: 150px;
+            background: linear-gradient(0deg, #1a1a1a 0%, #333 100%);
+            border-top: 4px solid #555; display: flex; justify-content: space-around; align-items: center;
+        }
+        .gauge { text-align: center; border: 2px solid #666; border-radius: 50%; width: 100px; height: 100px; display: flex; flex-direction: column; justify-content: center; background: #000; }
+        .gauge-val { font-size: 24px; font-weight: bold; color: #0f0; }
+        .label { font-size: 10px; color: #aaa; }
+
+        /* 行先案内板 */
+        #destination-board {
+            position: absolute; top: 30px; left: 50%; transform: translateX(-50%);
+            background: #222; border: 3px solid #444; padding: 10px 40px; border-radius: 5px;
+            color: #ffaa00; font-family: 'Courier New', Courier, monospace; text-align: center; box-shadow: 0 0 15px rgba(255, 170, 0, 0.3);
+        }
+        #next-stop { font-size: 28px; font-weight: bold; }
+        
+        #controls-hint { position: absolute; bottom: 160px; right: 20px; font-size: 12px; color: #ccc; background: rgba(0,0,0,0.5); padding: 5px; }
     </style>
 </head>
 <body>
 
 <div id="game-container">
-    <div id="ui">
-        <div class="info">次停車駅: <span id="next-stop" class="dest">金沢駅 (始発)</span></div>
-        <div class="info">速度: <span id="speed">0</span> km/h</div>
-        <div class="info">乗客の満足度: <span id="satisfaction">100</span>%</div>
+    <div id="destination-board">
+        <div style="font-size: 12px;">NEXT STOP</div>
+        <div id="next-stop">金沢駅東口 (出発待ち)</div>
     </div>
 
-    <canvas id="gameCanvas"></canvas>
+    <canvas id="driveCanvas"></canvas>
 
-    <div id="message"></div>
-    
-    <div id="controls">
-        操作方法:<br>
-        ↑ : 加速 / ↓ : ブレーキ・後退<br>
-        ← → : ハンドル操作<br>
-        バス停の黄色いエリアで停車してください
+    <div id="controls-hint">加速:↑ / ブレーキ:↓ / ハンドル:← →</div>
+
+    <div id="cockpit-ui">
+        <div class="gauge">
+            <span class="label">SPEED</span>
+            <span id="speed-val" class="gauge-val">0</span>
+            <span class="label">km/h</span>
+        </div>
+        <div style="font-size: 20px; color: #e60012; font-weight: bold;">北陸鉄道</div>
+        <div class="gauge">
+            <span class="label">DISTANCE</span>
+            <span id="dist-val" class="gauge-val">0</span>
+            <span class="label">m</span>
+        </div>
     </div>
 </div>
 
 <script>
-const canvas = document.getElementById('gameCanvas');
+const canvas = document.getElementById('driveCanvas');
 const ctx = canvas.getContext('2d');
+const speedEl = document.getElementById('speed-val');
+const distEl = document.getElementById('dist-val');
 const nextStopEl = document.getElementById('next-stop');
-const speedEl = document.getElementById('speed');
-const satisfEl = document.getElementById('satisfaction');
-const messageEl = document.getElementById('message');
 
-// キャンバスサイズ設定
 canvas.width = window.innerWidth;
-canvas.height = window.innerHeight;
+canvas.height = window.innerHeight - 150;
 
-// ゲーム状態
-const stops = [
-    { name: "金沢駅東口", y: 200, reached: false },
-    { name: "武蔵ヶ辻・近江町市場", y: -1500, reached: false },
-    { name: "南町・尾山神社", y: -3000, reached: false },
-    { name: "香林坊", y: -4500, reached: false }
-];
-
-let bus = {
-    x: canvas.width / 2,
-    y: canvas.height - 150,
-    width: 40,
-    height: 80,
+let state = {
     speed: 0,
-    angle: 0,
-    maxSpeed: 5,
-    accel: 0.1,
-    friction: 0.05,
-    rotation: 0
+    distance: 0,
+    offset: 0, // カーブやハンドルの揺れ
+    playerX: 0,
+    stopIndex: 0,
+    items: [] // 街並みのオブジェクト
 };
 
-let worldY = 0;
-let keys = {};
-let satisfaction = 100;
-let currentStopIdx = 0;
+const stops = [
+    { name: "武蔵ヶ辻・近江町市場", dist: 800 },
+    { name: "南町・尾山神社", dist: 1500 },
+    { name: "香林坊", dist: 2200 },
+    { name: "終点・金沢市役所前", dist: 2800 }
+];
 
+const keys = {};
 window.addEventListener('keydown', e => keys[e.code] = true);
 window.addEventListener('keyup', e => keys[e.code] = false);
 
-function update() {
-    // 加速・減速
-    if (keys['ArrowUp']) bus.speed += bus.accel;
-    if (keys['ArrowDown']) bus.speed -= bus.accel * 2;
-    
-    // 摩擦
-    if (bus.speed > 0) bus.speed -= bus.friction;
-    if (bus.speed < 0) bus.speed += bus.friction;
-    if (Math.abs(bus.speed) < 0.05) bus.speed = 0;
-
-    // 速度制限
-    if (bus.speed > bus.maxSpeed) bus.speed = bus.maxSpeed;
-    if (bus.speed < -2) bus.speed = -2;
-
-    // ハンドル操作
-    if (Math.abs(bus.speed) > 0.1) {
-        const turnSpeed = bus.speed > 0 ? 0.03 : -0.03;
-        if (keys['ArrowLeft']) bus.angle -= turnSpeed;
-        if (keys['ArrowRight']) bus.angle += turnSpeed;
+// 建物や街灯などのオブジェクト生成
+function createWorld() {
+    for (let i = 0; i < 50; i++) {
+        state.items.push({
+            z: i * 200,
+            x: Math.random() > 0.5 ? 1.5 : -1.5,
+            type: Math.random() > 0.3 ? 'building' : 'tree'
+        });
     }
-
-    // 移動計算
-    bus.x += Math.sin(bus.angle) * bus.speed;
-    worldY += Math.cos(bus.angle) * bus.speed;
-
-    // UI更新
-    speedEl.innerText = Math.floor(Math.abs(bus.speed) * 10);
-    
-    // バス停判定
-    checkBusStop();
 }
 
-function checkBusStop() {
-    let nextStop = stops[currentStopIdx];
-    let distance = Math.abs((canvas.height - 200 - worldY) - nextStop.y);
+function update() {
+    // 加速・ブレーキ
+    if (keys['ArrowUp']) state.speed += 0.2;
+    if (keys['ArrowDown']) state.speed -= 0.5;
+    state.speed *= 0.98; // 摩擦
+    if (state.speed < 0) state.speed = 0;
+    if (state.speed > 60) state.speed = 60;
 
-    if (distance < 50 && Math.abs(bus.speed) < 0.5) {
-        if (!nextStop.reached) {
-            nextStop.reached = true;
-            showMessage(nextStop.name + " に到着しました");
-            if (currentStopIdx < stops.length - 1) {
-                currentStopIdx++;
-                nextStopEl.innerText = stops[currentStopIdx].name;
-            } else {
-                showMessage("終点：香林坊。お疲れ様でした！");
-            }
+    // ハンドル
+    if (keys['ArrowLeft']) state.playerX -= 0.05;
+    if (keys['ArrowRight']) state.playerX += 0.05;
+    state.playerX *= 0.95; // 復元力
+
+    // 走行距離
+    state.distance += state.speed * 0.1;
+
+    // UI更新
+    speedEl.innerText = Math.floor(state.speed);
+    distEl.innerText = Math.floor(state.distance);
+
+    // バス停判定
+    if (state.stopIndex < stops.length) {
+        let target = stops[state.stopIndex];
+        nextStopEl.innerText = target.name;
+        
+        if (Math.abs(state.distance - target.dist) < 20 && state.speed < 2) {
+            state.speed = 0;
+            state.stopIndex++;
+            alert(target.name + " に到着しました。次は " + (stops[state.stopIndex]?.name || "終点") + " です。");
         }
     }
 }
 
-function showMessage(txt) {
-    messageEl.innerText = txt;
-    setTimeout(() => { if(messageEl.innerText === txt) messageEl.innerText = ""; }, 3000);
-}
-
 function draw() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const w = canvas.width;
+    const h = canvas.height;
+    const midY = h / 2;
 
-    // 背景（道路）の描画
-    ctx.save();
-    ctx.translate(0, worldY);
-
-    // 道路
-    ctx.fillStyle = "#444";
-    ctx.fillRect(canvas.width/2 - 100, -10000, 200, 20000);
+    // 背景：空
+    ctx.fillStyle = "#87CEEB";
+    ctx.fillRect(0, 0, w, midY);
     
-    // 白線
+    // 背景：地面（道路）
+    ctx.fillStyle = "#555";
+    ctx.fillRect(0, midY, w, midY);
+
+    // 遠近感のある道路の描画
+    ctx.fillStyle = "#777";
+    ctx.beginPath();
+    ctx.moveTo(w * 0.45, midY);
+    ctx.lineTo(w * 0.55, midY);
+    ctx.lineTo(w, h);
+    ctx.lineTo(0, h);
+    ctx.fill();
+
+    // センターライン
     ctx.strokeStyle = "#fff";
     ctx.setLineDash([20, 20]);
     ctx.beginPath();
-    ctx.moveTo(canvas.width/2, -10000);
-    ctx.lineTo(canvas.width/2, 10000);
+    ctx.moveTo(w / 2 + (state.playerX * 100), midY);
+    ctx.lineTo(w / 2 - (state.playerX * 1000), h);
     ctx.stroke();
 
-    // バス停の描画
-    stops.forEach(stop => {
-        ctx.fillStyle = stop.reached ? "rgba(0, 255, 0, 0.3)" : "rgba(255, 255, 0, 0.5)";
-        ctx.fillRect(canvas.width/2 - 120, stop.y, 240, 60);
-        ctx.fillStyle = "white";
-        ctx.font = "20px Bold Arial";
-        ctx.fillText("🚏 " + stop.name, canvas.width/2 + 130, stop.y + 35);
+    // 建物や景色の描画（簡易擬似3D）
+    state.items.forEach(item => {
+        let zPos = (item.z - (state.distance * 5)) % 10000;
+        if (zPos < 0) zPos += 10000;
+        
+        if (zPos < 2000) {
+            let scale = 100 / (zPos + 10);
+            let screenX = w/2 + (item.x - state.playerX) * scale * 500;
+            let screenY = midY + scale * 50;
+            let size = scale * 300;
+
+            if (item.type === 'building') {
+                ctx.fillStyle = "#999";
+                ctx.fillRect(screenX - size/2, screenY - size, size, size);
+                ctx.strokeStyle = "#444";
+                ctx.strokeRect(screenX - size/2, screenY - size, size, size);
+            } else {
+                ctx.fillStyle = "green";
+                ctx.beginPath();
+                ctx.arc(screenX, screenY - size/2, size/3, 0, Math.PI*2);
+                ctx.fill();
+            }
+        }
     });
 
-    ctx.restore();
+    // バス停ポールが近づいた時の描画
+    if (state.stopIndex < stops.length) {
+        let stopDist = (stops[state.stopIndex].dist - state.distance) * 5;
+        if (stopDist > 0 && stopDist < 1000) {
+            let scale = 100 / (stopDist + 10);
+            let sx = w/2 + (1.2 - state.playerX) * scale * 500;
+            ctx.fillStyle = "#e60012";
+            ctx.fillRect(sx, midY + scale * 50 - scale * 150, 10 * scale, 150 * scale);
+            ctx.fillStyle = "white";
+            ctx.fillText("BUS STOP", sx, midY);
+        }
+    }
 
-    // バス本体の描画
-    ctx.save();
-    ctx.translate(bus.x, bus.y);
-    ctx.rotate(bus.angle);
-
-    // 北鉄バスカラーリング (赤とクリーム)
-    ctx.fillStyle = "#f5f5dc"; // クリーム色
-    ctx.fillRect(-bus.width/2, -bus.height/2, bus.width, bus.height);
+    // フロントガラスのフレーム（運転席感）
+    ctx.strokeStyle = "#222";
+    ctx.lineWidth = 40;
+    ctx.strokeRect(0, 0, w, h);
     
-    ctx.fillStyle = "#e60012"; // 北鉄レッド
-    ctx.fillRect(-bus.width/2, 0, bus.width, bus.height/4); // サイドライン
-    ctx.fillRect(-bus.width/2, -bus.height/2, bus.width, 10); // 前面
-    
-    // 窓
-    ctx.fillStyle = "#333";
-    ctx.fillRect(-bus.width/2 + 5, -bus.height/2 + 5, bus.width - 10, 15); // フロントガラス
-    
-    // ライト
-    ctx.fillStyle = "yellow";
-    ctx.fillRect(-bus.width/2 + 5, -bus.height/2, 8, 5);
-    ctx.fillRect(bus.width/2 - 13, -bus.height/2, 8, 5);
-
-    ctx.restore();
+    // ワイパー（静止）
+    ctx.lineWidth = 10;
+    ctx.beginPath();
+    ctx.moveTo(w * 0.1, h);
+    ctx.lineTo(w * 0.4, h * 0.8);
+    ctx.stroke();
 
     update();
     requestAnimationFrame(draw);
 }
 
+createWorld();
 draw();
 </script>
 </body>
