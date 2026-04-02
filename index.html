@@ -2,199 +2,157 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>北鉄バス 3D運転シミュレーター (金沢駅〜香林坊)</title>
+    <title>北鉄バス リアルビュー・シミュレーター (金沢駅〜香林坊)</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
-        #info {
-            position: absolute; top: 20px; left: 20px; color: #fff;
-            background: rgba(0,0,0,0.7); padding: 15px; border-radius: 10px;
-            border-left: 5px solid #e60012; pointer-events: none;
+        body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; font-family: 'Hiragino Kaku Gothic ProN', sans-serif; background: #000; }
+        
+        /* ストリートビュー表示エリア */
+        #street-view { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+
+        /* 運転席オーバーレイ（フロントガラス越し） */
+        #cockpit {
+            position: absolute; bottom: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(to top, rgba(30,30,30,1) 0%, rgba(30,30,30,0.8) 15%, transparent 40%);
+            z-index: 10; pointer-events: none;
+            border: 20px solid #222; border-bottom: 60px solid #111; box-sizing: border-box;
         }
-        .label { font-size: 12px; color: #aaa; }
-        .val { font-size: 24px; font-weight: bold; color: #ffcc00; }
-        #nav {
-            position: absolute; top: 20px; right: 20px; width: 250px;
-            background: rgba(0,0,0,0.8); color: #fff; padding: 10px; border-radius: 5px;
+
+        /* ハンドル */
+        #steering-wheel {
+            position: absolute; bottom: -50px; left: 50%; transform: translateX(-50%);
+            width: 400px; height: 400px;
+            background: url('https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Steering_wheel.svg/1024px-Steering_wheel.svg.png') no-repeat center;
+            background-size: contain; transition: transform 0.1s linear; z-index: 20;
+            filter: drop-shadow(0 10px 10px rgba(0,0,0,0.8));
         }
-        #guide-msg { position: absolute; top: 20%; width: 100%; text-align: center; color: #fff; font-size: 32px; font-weight: bold; text-shadow: 2px 2px 5px #000; pointer-events: none; }
+
+        /* ダッシュボード UI */
+        #dashboard {
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 50px; z-index: 30; color: #fff; text-align: center; width: 80%; justify-content: space-between;
+        }
+        .gauge { background: rgba(0,0,0,0.8); padding: 10px 20px; border-radius: 10px; border: 2px solid #e60012; }
+        .val { font-size: 30px; font-weight: bold; color: #00ff00; }
+        .unit { font-size: 14px; color: #aaa; }
+
+        #top-info {
+            position: absolute; top: 30px; left: 50%; transform: translateX(-50%);
+            background: rgba(0,0,0,0.8); color: #ffaa00; padding: 15px 40px;
+            font-size: 24px; font-weight: bold; border: 3px solid #444; z-index: 40; border-radius: 5px;
+        }
     </style>
 </head>
 <body>
 
-<div id="info">
-    <div class="label">SPEED</div>
-    <div id="speed" class="val">0 km/h</div>
-    <div class="label" style="margin-top:10px;">NEXT STOP</div>
-    <div id="next-stop" class="val" style="font-size:18px;">武蔵ヶ辻・近江町市場</div>
-</div>
+    <div id="street-view"></div>
+    <div id="cockpit">
+        <div id="steering-wheel"></div>
+        <div id="dashboard">
+            <div class="gauge">
+                <div class="unit">SPEED</div>
+                <div id="speed" class="val">0</div>
+                <div class="unit">km/h</div>
+            </div>
+            <div style="font-size: 30px; color: #e60012; font-weight: bold; text-shadow: 2px 2px 0px #fff;">北陸鉄道</div>
+            <div class="gauge">
+                <div class="unit">CURRENT STOP</div>
+                <div id="location" class="val" style="font-size: 18px;">金沢駅東口</div>
+            </div>
+        </div>
+    </div>
+    <div id="top-info">NEXT: 武蔵ヶ辻・近江町市場</div>
 
-<div id="nav">
-    <strong style="color:#e60012;">【北鉄バス 運転マニュアル】</strong><br>
-    ↑ : アクセル / ↓ : ブレーキ<br>
-    ← → : ハンドル<br>
-    <small>※武蔵ヶ辻交差点は右折です！</small>
-</div>
+    <script src="https://maps.googleapis.com/maps/api/js?v=3.exp"></script>
 
-<div id="guide-msg"></div>
+    <script>
+        let panorama;
+        let speed = 0;
+        let heading = 155; // 金沢駅からの初期方位
+        let lat = 36.578057; // 金沢駅東口
+        let lng = 136.649111;
+        let wheelAngle = 0;
+        let keys = {};
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+        // ルート上の主要ポイント (Lat, Lng)
+        const waypoints = [
+            { name: "金沢駅東口", lat: 36.578057, lng: 136.649111 },
+            { name: "リファーレ前", lat: 36.575510, lng: 136.652150 },
+            { name: "武蔵ヶ辻（交差点）", lat: 36.572186, lng: 136.656519 },
+            { name: "南町・尾山神社", lat: 36.567845, lng: 136.655071 },
+            { name: "香林坊（終点）", lat: 36.563032, lng: 136.654316 }
+        ];
 
-<script>
-let scene, camera, renderer, bus;
-let speed = 0, angle = 0;
-let keys = {};
-let objects = [];
+        function initPano() {
+            panorama = new google.maps.StreetViewPanorama(
+                document.getElementById('street-view'), {
+                    position: { lat: lat, lng: lng },
+                    pov: { heading: heading, pitch: 0 },
+                    visible: true,
+                    disableDefaultUI: true, // 余計なUIを隠す
+                    scrollwheel: false,
+                    clickToGo: false
+                }
+            );
+        }
 
-init();
-animate();
+        window.addEventListener('keydown', e => keys[e.code] = true);
+        window.addEventListener('keyup', e => keys[e.code] = false);
 
-function init() {
-    // Scene & Camera
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x87ceeb);
-    scene.fog = new THREE.Fog(0x87ceeb, 1, 1000);
+        function update() {
+            // アクセル・ブレーキ
+            if (keys['ArrowUp']) speed += 0.5;
+            if (keys['ArrowDown']) speed -= 1.0;
+            speed *= 0.95; // 慣性抵抗
+            if (speed < 0) speed = 0;
+            if (speed > 60) speed = 60;
 
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+            // ハンドル操作
+            if (keys['ArrowLeft']) {
+                heading -= 1.5;
+                wheelAngle -= 5;
+            } else if (keys['ArrowRight']) {
+                heading += 1.5;
+                wheelAngle += 5;
+            } else {
+                wheelAngle *= 0.9; // ハンドルが戻る
+            }
 
-    renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    document.body.appendChild(renderer.domElement);
+            // 制限
+            if (wheelAngle > 90) wheelAngle = 90;
+            if (wheelAngle < -90) wheelAngle = -90;
 
-    // Light
-    const sun = new THREE.DirectionalLight(0xffffff, 1);
-    sun.position.set(100, 200, 100);
-    scene.add(sun);
-    scene.add(new THREE.AmbientLight(0x404040));
+            // 位置更新（簡易計算）
+            if (speed > 1) {
+                const step = speed * 0.000002;
+                lat += Math.cos(heading * Math.PI / 180) * step;
+                lng += Math.sin(heading * Math.PI / 180) * step;
+                
+                panorama.setPosition({ lat: lat, lng: lng });
+                panorama.setPov({ heading: heading, pitch: -2 }); // 少し下向きで運転席感
+            }
 
-    // Ground & Roads (Simple City Layout)
-    createCity();
+            // UI反映
+            document.getElementById('speed').innerText = Math.floor(speed);
+            document.getElementById('steering-wheel').style.transform = `translateX(-50%) rotate(${wheelAngle}deg)`;
 
-    // Player Bus (Placeholder 3D)
-    const busGroup = new THREE.Group();
-    
-    // Body (North-Tetsu Colors)
-    const bodyGeom = new THREE.BoxGeometry(2.5, 3, 8);
-    const bodyMat = new THREE.MeshPhongMaterial({ color: 0xf5f5dc }); // Cream
-    const body = new THREE.Mesh(bodyGeom, bodyMat);
-    busGroup.add(body);
+            // 地点チェック
+            waypoints.forEach(wp => {
+                const d = Math.sqrt(Math.pow(lat - wp.lat, 2) + Math.pow(lng - wp.lng, 2));
+                if (d < 0.0005) {
+                    document.getElementById('location').innerText = wp.name;
+                    if (wp.name === "香林坊（終点）") {
+                        document.getElementById('top-info').innerText = "ご乗車ありがとうございました。";
+                    } else {
+                        document.getElementById('top-info').innerText = "次は: " + wp.name;
+                    }
+                }
+            });
 
-    const redLine = new THREE.Mesh(
-        new THREE.BoxGeometry(2.6, 0.5, 8.1),
-        new THREE.MeshPhongMaterial({ color: 0xe60012 })
-    );
-    redLine.position.y = -0.5;
-    busGroup.add(redLine);
+            requestAnimationFrame(update);
+        }
 
-    // Windows
-    const winGeom = new THREE.BoxGeometry(2.4, 1, 4);
-    const winMat = new THREE.MeshPhongMaterial({ color: 0x333333 });
-    const frontWin = new THREE.Mesh(winGeom, winMat);
-    frontWin.position.set(0, 0.8, -2.1);
-    busGroup.add(frontWin);
-
-    bus = busGroup;
-    scene.add(bus);
-    bus.position.y = 1.5;
-    bus.position.z = 0;
-
-    window.addEventListener('keydown', e => keys[e.code] = true);
-    window.addEventListener('keyup', e => keys[e.code] = false);
-}
-
-function createCity() {
-    // 道路：金沢駅から武蔵ヶ辻まで（直線）
-    addRoad(0, 0, 0, 500, 0); 
-    // 武蔵ヶ辻交差点
-    addBuilding(20, 0, -480, 40, 60, 40, 0x999999); // 交差点ビル
-    
-    // 右折後の道路（香林坊方面）
-    addRoad(250, 0, -500, 500, Math.PI / 2);
-
-    // 街路樹・ビルを配置
-    for(let i=0; i<20; i++) {
-        addBuilding(-15, 0, -i*50, 10, 20 + Math.random()*30, 15);
-        addBuilding(15, 0, -i*50, 10, 25 + Math.random()*20, 15);
-    }
-}
-
-function addRoad(x, y, z, length, rotation) {
-    const roadGeom = new THREE.PlaneGeometry(20, length);
-    const roadMat = new THREE.MeshPhongMaterial({ color: 0x333333, side: THREE.DoubleSide });
-    const road = new THREE.Mesh(roadGeom, roadMat);
-    road.rotation.x = Math.PI / 2;
-    road.rotation.z = rotation;
-    road.position.set(x, y + 0.01, z);
-    scene.add(road);
-
-    // 白線
-    const lineGeom = new THREE.PlaneGeometry(0.5, length);
-    const lineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    const line = new THREE.Mesh(lineGeom, lineMat);
-    line.rotation.x = Math.PI / 2;
-    line.rotation.z = rotation;
-    line.position.set(x, y + 0.02, z);
-    scene.add(line);
-}
-
-function addBuilding(x, y, z, w, h, d, col = 0x888888) {
-    const geom = new THREE.BoxGeometry(w, h, d);
-    const mat = new THREE.MeshPhongMaterial({ color: col });
-    const b = new THREE.Mesh(geom, mat);
-    b.position.set(x, y + h / 2, z);
-    scene.add(b);
-}
-
-function updatePhysics() {
-    // 加速・減速
-    if (keys['ArrowUp']) speed += 0.01;
-    if (keys['ArrowDown']) speed -= 0.02;
-    speed *= 0.985; // 摩擦
-    if (Math.abs(speed) < 0.001) speed = 0;
-
-    // ハンドル
-    if (Math.abs(speed) > 0.01) {
-        if (keys['ArrowLeft']) angle += 0.02;
-        if (keys['ArrowRight']) angle -= 0.02;
-    }
-
-    // 移動
-    bus.position.x += Math.sin(angle) * speed;
-    bus.position.z += Math.cos(angle) * speed;
-    bus.rotation.y = angle + Math.PI;
-
-    // カメラ位置（運転席視点）
-    camera.position.set(
-        bus.position.x - Math.sin(angle) * 1,
-        bus.position.y + 1.2,
-        bus.position.z - Math.cos(angle) * 1
-    );
-    camera.rotation.y = angle + Math.PI;
-
-    // UI
-    document.getElementById('speed').innerText = Math.floor(speed * 100) + " km/h";
-
-    // 武蔵ヶ辻 右折ガイド
-    if (bus.position.z < -450 && bus.position.z > -550 && Math.abs(angle) < 0.5) {
-        document.getElementById('guide-msg').innerText = "武蔵ヶ辻交差点：右折してください";
-    } else if (bus.position.x > 50) {
-        document.getElementById('guide-msg').innerText = "まもなく 武蔵ヶ辻・近江町市場 です";
-    } else {
-        document.getElementById('guide-msg').innerText = "";
-    }
-}
-
-function animate() {
-    requestAnimationFrame(animate);
-    updatePhysics();
-    renderer.render(scene, camera);
-}
-
-// レスポンシブ対応
-window.addEventListener('resize', () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-});
-</script>
+        google.maps.event.addDomListener(window, 'load', initPano);
+        update();
+    </script>
 </body>
 </html>
