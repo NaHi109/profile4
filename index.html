@@ -2,28 +2,37 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>北鉄バス リアルドライブ・プロ (地上ロータリー発)</title>
+    <title>北鉄バス リアルドライブ - 地上運行版</title>
     <style>
         body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; font-family: sans-serif; }
-        #view-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; filter: saturate(1.2); }
-        #cockpit { position: absolute; bottom: 0; left: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none; background: linear-gradient(to top, #111 0%, transparent 30%); }
+        #view-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+        #cockpit { position: absolute; bottom: 0; left: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none; background: linear-gradient(to top, #111 0%, transparent 25%); }
         
-        /* ハンドル：少し大きく、より運転席らしく */
-        #steering-unit { position: absolute; bottom: -120px; left: 50%; transform: translateX(-50%); width: 600px; height: 600px; z-index: 20; }
+        /* ハンドル */
+        #steering-unit { position: absolute; bottom: -120px; left: 50%; transform: translateX(-50%); width: 550px; height: 550px; z-index: 20; }
         #steering-wheel { width: 100%; height: 100%; background: url('https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Steering_wheel.svg/1024px-Steering_wheel.svg.png') no-repeat center; background-size: contain; filter: drop-shadow(0 20px 20px #000); }
 
+        /* 計器パネル */
         #dashboard { position: absolute; bottom: 0; width: 100%; height: 120px; background: #1a1a1a; border-top: 5px solid #e60012; display: flex; justify-content: center; align-items: center; gap: 80px; color: white; z-index: 15; }
-        .gauge { text-align: center; background: #000; padding: 10px 40px; border-radius: 8px; border: 1px solid #333; }
-        .gauge-val { font-size: 40px; font-weight: bold; color: #00ff00; font-family: monospace; }
+        .gauge { text-align: center; background: #000; padding: 10px 30px; border-radius: 8px; border: 1px solid #333; min-width: 120px; }
+        .gauge-val { font-size: 36px; font-weight: bold; color: #00ff00; font-family: monospace; }
         
+        /* 地上復帰ボタン */
+        #rescue-btn {
+            position: absolute; top: 20px; right: 20px; padding: 15px 25px;
+            background: #ffcc00; color: #000; font-weight: bold; border: none;
+            border-radius: 50px; cursor: pointer; z-index: 100; box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        }
+        #rescue-btn:hover { background: #fff; }
+
         #info-panel { position: absolute; top: 20px; left: 20px; background: rgba(0,0,0,0.8); border-left: 10px solid #e60012; color: #fff; padding: 20px; z-index: 30; }
-        #msg { position: absolute; top: 40%; width: 100%; text-align: center; color: white; font-size: 24px; text-shadow: 2px 2px 4px #000; z-index: 100; pointer-events: none; }
     </style>
 </head>
 <body>
 
+    <button id="rescue-btn" onclick="resetToGround()">地上に戻る (ワープ)</button>
+
     <div id="view-container"><div id="pano" style="width: 100%; height: 100%;"></div></div>
-    <div id="msg">読み込み中... (画面をクリックして開始)</div>
 
     <div id="cockpit">
         <div id="steering-unit"><div id="steering-wheel"></div></div>
@@ -34,117 +43,108 @@
                 <div style="font-size: 10px;">km/h</div>
             </div>
             <div style="text-align: center;">
-                <div style="color: #e60012; font-weight: 900; font-size: 30px;">北陸鉄道</div>
-                <div style="font-size: 10px; letter-spacing: 2px;">KANAZAWA CITY BUS</div>
+                <div style="color: #e60012; font-weight: 900; font-size: 28px;">北陸鉄道</div>
+                <div style="font-size: 10px; letter-spacing: 2px;">KANAZAWA STATION ROUTE</div>
             </div>
             <div class="gauge">
-                <div style="font-size: 10px; color: #888;">STATUS</div>
-                <div id="status-text" class="gauge-val" style="font-size: 20px; color: #ffaa00;">IDLE</div>
+                <div style="font-size: 10px; color: #888;">HEADING</div>
+                <div id="heading-num" class="gauge-val" style="font-size: 24px; color: #ffaa00;">140°</div>
             </div>
         </div>
     </div>
 
     <div id="info-panel">
-        <div style="font-size: 12px; color: #aaa;">現在地</div>
-        <div id="loc-name" style="font-size: 24px; font-weight: bold; color: #ffcc00;">金沢駅東口 鼓門前</div>
+        <div style="font-size: 11px; color: #aaa;">運行中</div>
+        <div id="loc-name" style="font-size: 20px; font-weight: bold; color: #ffcc00;">金沢駅東口 鼓門前</div>
+        <div style="font-size: 11px; color: #fff; margin-top: 5px;">↑:アクセル / ↓:ブレーキ / ←→:転舵</div>
     </div>
 
     <script src="https://maps.googleapis.com/maps/api/js?v=3.exp"></script>
 
     <script>
         let panorama;
+        // 地上のバス専用レーン座標に厳密に設定
+        const GROUND_POS = { lat: 36.577636, lng: 136.649231 }; 
+        const GROUND_HEADING = 145;
+
         let state = {
-            // 地上のバスロータリー座標に固定
-            lat: 36.578050, 
-            lng: 136.649300,
-            heading: 140, // 鼓門から市内方向を向く
+            lat: GROUND_POS.lat,
+            lng: GROUND_POS.lng,
+            heading: GROUND_HEADING,
             speed: 0,
-            wheel: 0,
-            isMoving: false
+            wheel: 0
         };
         let keys = {};
 
         function init() {
             panorama = new google.maps.StreetViewPanorama(
                 document.getElementById('pano'), {
-                    position: { lat: state.lat, lng: state.lng },
-                    pov: { heading: state.heading, pitch: -2 },
+                    position: GROUND_POS,
+                    pov: { heading: state.heading, pitch: -3 },
                     visible: true,
                     disableDefaultUI: true,
                     clickToGo: false,
-                    scrollwheel: false
+                    zoom: 0 // 視野を広げて地上を確認しやすくする
                 }
             );
-            
-            // ロード完了時にメッセージ消去
-            google.maps.event.addListenerOnce(panorama, 'status_changed', function() {
-                if (panorama.getStatus() === 'OK') {
-                    document.getElementById('msg').innerText = "↑キー長押しで加速！";
-                    setTimeout(() => { document.getElementById('msg').innerText = ""; }, 3000);
-                }
-            });
         }
 
-        window.addEventListener('keydown', e => {
-            keys[e.code] = true;
-            state.isMoving = true;
-        });
+        // 強制地上復帰関数
+        function resetToGround() {
+            state.lat = GROUND_POS.lat;
+            state.lng = GROUND_POS.lng;
+            state.heading = GROUND_HEADING;
+            state.speed = 0;
+            panorama.setPosition(GROUND_POS);
+            panorama.setPov({ heading: state.heading, pitch: -3 });
+            alert("地上（ロータリー入口）に復帰しました。");
+        }
+
+        window.addEventListener('keydown', e => keys[e.code] = true);
         window.addEventListener('keyup', e => keys[e.code] = false);
-        window.addEventListener('mousedown', () => { /* フォーカス用 */ });
 
         function update() {
-            const accel = 0.2;  // 加速
-            const brake = 0.6;  // ブレーキ
-            const friction = 0.01; // 自然減速（極めて小さい）
-
-            // スピード処理
+            // バス物理演算（慣性重視）
             if (keys['ArrowUp']) {
-                state.speed += accel;
-                document.getElementById('status-text').innerText = "DRIVE";
-                document.getElementById('status-text').style.color = "#00ff00";
+                state.speed += 0.25;
             } else if (keys['ArrowDown']) {
-                state.speed -= brake;
-                document.getElementById('status-text').innerText = "BRAKE";
-                document.getElementById('status-text').style.color = "#ff4444";
+                state.speed -= 0.7;
             } else {
-                state.speed -= friction; // 離してもなかなか止まらない
-                if (state.speed < 0.1) {
-                    state.speed = 0;
-                    document.getElementById('status-text').innerText = "IDLE";
-                    document.getElementById('status-text').style.color = "#ffaa00";
-                }
+                state.speed -= 0.02; // 自然減速
             }
-            if (state.speed > 60) state.speed = 60; // 最高速度
 
-            // ハンドル・旋回処理
+            if (state.speed < 0) state.speed = 0;
+            if (state.speed > 55) state.speed = 55;
+
+            // ステアリング
             if (keys['ArrowLeft']) {
-                state.wheel = Math.max(state.wheel - 5, -360);
-                if (state.speed > 0.5) state.heading -= (state.speed * 0.05);
+                state.wheel = Math.max(state.wheel - 6, -450);
+                if (state.speed > 0.5) state.heading -= (state.speed * 0.04);
             } else if (keys['ArrowRight']) {
-                state.wheel = Math.min(state.wheel + 5, 360);
-                if (state.speed > 0.5) state.heading += (state.speed * 0.05);
+                state.wheel = Math.min(state.wheel + 6, 450);
+                if (state.speed > 0.5) state.heading += (state.speed * 0.04);
             } else {
-                state.wheel *= 0.9; // ハンドルが戻る
+                state.wheel *= 0.92;
             }
 
             // 移動実行
             if (state.speed > 0) {
-                const moveStep = state.speed * 0.0000025;
-                state.lat += Math.cos(state.heading * Math.PI / 180) * moveStep;
-                state.lng += Math.sin(state.heading * Math.PI / 180) * moveStep;
+                const step = state.speed * 0.0000028;
+                state.lat += Math.cos(state.heading * Math.PI / 180) * step;
+                state.lng += Math.sin(state.heading * Math.PI / 180) * step;
                 
                 panorama.setPosition({ lat: state.lat, lng: state.lng });
-                panorama.setPov({ heading: state.heading, pitch: -2 });
+                panorama.setPov({ heading: state.heading, pitch: -3 });
             }
 
-            // UI反映
+            // UI
             document.getElementById('speed-num').innerText = Math.floor(state.speed);
+            document.getElementById('heading-num').innerText = Math.floor(state.heading % 360) + "°";
             document.getElementById('steering-wheel').style.transform = `rotate(${state.wheel}deg)`;
 
             requestAnimationFrame(update);
         }
 
-        // 実行
         google.maps.event.addDomListener(window, 'load', init);
         update();
     </script>
