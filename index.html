@@ -2,144 +2,152 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>北鉄バス リアルドライブ - 地上運行版</title>
+    <title>北鉄バス リアルドライブ・ハイパー (前面展望スピード特化版)</title>
     <style>
         body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; font-family: sans-serif; }
-        #view-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
-        #cockpit { position: absolute; bottom: 0; left: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none; background: linear-gradient(to top, #111 0%, transparent 25%); }
         
-        /* ハンドル */
-        #steering-unit { position: absolute; bottom: -120px; left: 50%; transform: translateX(-50%); width: 550px; height: 550px; z-index: 20; }
-        #steering-wheel { width: 100%; height: 100%; background: url('https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Steering_wheel.svg/1024px-Steering_wheel.svg.png') no-repeat center; background-size: contain; filter: drop-shadow(0 20px 20px #000); }
-
-        /* 計器パネル */
-        #dashboard { position: absolute; bottom: 0; width: 100%; height: 120px; background: #1a1a1a; border-top: 5px solid #e60012; display: flex; justify-content: center; align-items: center; gap: 80px; color: white; z-index: 15; }
-        .gauge { text-align: center; background: #000; padding: 10px 30px; border-radius: 8px; border: 1px solid #333; min-width: 120px; }
-        .gauge-val { font-size: 36px; font-weight: bold; color: #00ff00; font-family: monospace; }
-        
-        /* 地上復帰ボタン */
-        #rescue-btn {
-            position: absolute; top: 20px; right: 20px; padding: 15px 25px;
-            background: #ffcc00; color: #000; font-weight: bold; border: none;
-            border-radius: 50px; cursor: pointer; z-index: 100; box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        /* 映像処理：スピード感のための動的フィルタ */
+        #view-container {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 1;
+            transition: filter 0.1s;
         }
-        #rescue-btn:hover { background: #fff; }
 
-        #info-panel { position: absolute; top: 20px; left: 20px; background: rgba(0,0,0,0.8); border-left: 10px solid #e60012; color: #fff; padding: 20px; z-index: 30; }
+        /* 運転席コックピット：動画のような前面展望を再現 */
+        #cockpit-frame {
+            position: absolute; bottom: 0; left: 0; width: 100%; height: 100%;
+            z-index: 10; pointer-events: none;
+            /* 下部のダッシュボードを動画に寄せて配置 */
+            background: linear-gradient(to top, #000 0%, #1a1a1a 10%, transparent 25%);
+            border-left: 15px solid #222;
+            border-right: 15px solid #222;
+        }
+
+        /* ハンドル：動画のように少し低めの位置へ */
+        #steering-unit {
+            position: absolute; bottom: -150px; left: 30%; /* 運転席側に寄せる */
+            transform: translateX(-50%); width: 600px; height: 600px; z-index: 20;
+            opacity: 0.9;
+        }
+        #steering-wheel {
+            width: 100%; height: 100%;
+            background: url('https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Steering_wheel.svg/1024px-Steering_wheel.svg.png') no-repeat center;
+            background-size: contain; filter: drop-shadow(0 20px 30px #000);
+        }
+
+        /* 計器類：プロフェッショナルなデジタル表示 */
+        #hud {
+            position: absolute; bottom: 30px; right: 50px; text-align: right;
+            color: #00ff00; font-family: 'Courier New', monospace; z-index: 30;
+            text-shadow: 0 0 10px rgba(0,255,0,0.7);
+        }
+        .hud-val { font-size: 60px; font-weight: bold; line-height: 1; }
+
+        #nav-msg {
+            position: absolute; top: 30px; left: 50%; transform: translateX(-50%);
+            background: rgba(0,0,0,0.7); color: #fff; padding: 10px 30px;
+            border-radius: 50px; border: 1px solid #e60012; z-index: 100;
+        }
+
+        #rescue {
+            position: absolute; top: 20px; right: 20px; padding: 10px;
+            background: #444; color: #fff; border: none; cursor: pointer; z-index: 100;
+        }
     </style>
 </head>
 <body>
 
-    <button id="rescue-btn" onclick="resetToGround()">地上に戻る (ワープ)</button>
+    <button id="rescue" onclick="resetPos()">地上リセット</button>
+    <div id="nav-msg">金沢駅東口ロータリー (↑長押しでフルスロットル)</div>
 
-    <div id="view-container"><div id="pano" style="width: 100%; height: 100%;"></div></div>
-
-    <div id="cockpit">
-        <div id="steering-unit"><div id="steering-wheel"></div></div>
-        <div id="dashboard">
-            <div class="gauge">
-                <div style="font-size: 10px; color: #888;">SPEED</div>
-                <div id="speed-num" class="gauge-val">0</div>
-                <div style="font-size: 10px;">km/h</div>
-            </div>
-            <div style="text-align: center;">
-                <div style="color: #e60012; font-weight: 900; font-size: 28px;">北陸鉄道</div>
-                <div style="font-size: 10px; letter-spacing: 2px;">KANAZAWA STATION ROUTE</div>
-            </div>
-            <div class="gauge">
-                <div style="font-size: 10px; color: #888;">HEADING</div>
-                <div id="heading-num" class="gauge-val" style="font-size: 24px; color: #ffaa00;">140°</div>
-            </div>
-        </div>
+    <div id="view-container">
+        <div id="pano" style="width: 100%; height: 100%;"></div>
     </div>
 
-    <div id="info-panel">
-        <div style="font-size: 11px; color: #aaa;">運行中</div>
-        <div id="loc-name" style="font-size: 20px; font-weight: bold; color: #ffcc00;">金沢駅東口 鼓門前</div>
-        <div style="font-size: 11px; color: #fff; margin-top: 5px;">↑:アクセル / ↓:ブレーキ / ←→:転舵</div>
+    <div id="cockpit-frame">
+        <div id="steering-unit"><div id="steering-wheel"></div></div>
+        <div id="hud">
+            <div style="font-size: 14px;">SPEEDOMETER</div>
+            <div id="speed-txt" class="hud-val">0</div>
+            <div style="font-size: 20px;">km/h</div>
+        </div>
     </div>
 
     <script src="https://maps.googleapis.com/maps/api/js?v=3.exp"></script>
 
     <script>
         let panorama;
-        // 地上のバス専用レーン座標に厳密に設定
-        const GROUND_POS = { lat: 36.577636, lng: 136.649231 }; 
-        const GROUND_HEADING = 145;
-
+        const START_POS = { lat: 36.577636, lng: 136.649231 };
         let state = {
-            lat: GROUND_POS.lat,
-            lng: GROUND_POS.lng,
-            heading: GROUND_HEADING,
-            speed: 0,
-            wheel: 0
+            lat: START_POS.lat, lng: START_POS.lng,
+            heading: 145, speed: 0, wheel: 0, fov: 90
         };
         let keys = {};
 
         function init() {
             panorama = new google.maps.StreetViewPanorama(
                 document.getElementById('pano'), {
-                    position: GROUND_POS,
-                    pov: { heading: state.heading, pitch: -3 },
+                    position: START_POS,
+                    pov: { heading: state.heading, pitch: -5 }, // 視点を少し下げてスピード感を出す
                     visible: true,
                     disableDefaultUI: true,
-                    clickToGo: false,
-                    zoom: 0 // 視野を広げて地上を確認しやすくする
+                    zoom: 0 // 広角設定
                 }
             );
         }
 
-        // 強制地上復帰関数
-        function resetToGround() {
-            state.lat = GROUND_POS.lat;
-            state.lng = GROUND_POS.lng;
-            state.heading = GROUND_HEADING;
-            state.speed = 0;
-            panorama.setPosition(GROUND_POS);
-            panorama.setPov({ heading: state.heading, pitch: -3 });
-            alert("地上（ロータリー入口）に復帰しました。");
+        function resetPos() {
+            state.lat = START_POS.lat; state.lng = START_POS.lng;
+            state.speed = 0; state.heading = 145;
+            panorama.setPosition(START_POS);
         }
 
         window.addEventListener('keydown', e => keys[e.code] = true);
         window.addEventListener('keyup', e => keys[e.code] = false);
 
         function update() {
-            // バス物理演算（慣性重視）
+            // バスらしい強力な加速性能（動画の疾走感を再現）
             if (keys['ArrowUp']) {
-                state.speed += 0.25;
+                state.speed += 0.5; 
             } else if (keys['ArrowDown']) {
-                state.speed -= 0.7;
+                state.speed -= 1.2;
             } else {
-                state.speed -= 0.02; // 自然減速
+                state.speed -= 0.05; // 慣性走行
             }
 
             if (state.speed < 0) state.speed = 0;
-            if (state.speed > 55) state.speed = 55;
+            if (state.speed > 80) state.speed = 80; // 動画のような高速走行を許容
 
-            // ステアリング
+            // ステアリング（高速時は少し重くなる設定）
+            let steerPower = state.speed > 30 ? 0.06 : 0.04;
             if (keys['ArrowLeft']) {
-                state.wheel = Math.max(state.wheel - 6, -450);
-                if (state.speed > 0.5) state.heading -= (state.speed * 0.04);
+                state.wheel = Math.max(state.wheel - 10, -450);
+                state.heading -= (state.speed * steerPower);
             } else if (keys['ArrowRight']) {
-                state.wheel = Math.min(state.wheel + 6, 450);
-                if (state.speed > 0.5) state.heading += (state.speed * 0.04);
+                state.wheel = Math.min(state.wheel + 10, 450);
+                state.heading += (state.speed * steerPower);
             } else {
-                state.wheel *= 0.92;
+                state.wheel *= 0.9;
             }
 
-            // 移動実行
-            if (state.speed > 0) {
-                const step = state.speed * 0.0000028;
+            // 【スピード演出】速度に応じてFOV（視野角）とブラーを変化させる
+            let currentFov = 90 + (state.speed * 0.5); // 速いほど広角に
+            let blurVal = (state.speed > 40) ? (state.speed - 40) * 0.05 : 0;
+            document.getElementById('view-container').style.filter = `contrast(1.1) brightness(1.1) blur(${blurVal}px)`;
+
+            if (state.speed > 0.1) {
+                // 移動計算
+                const step = state.speed * 0.000004; // 移動係数をアップしてスピード感を強化
                 state.lat += Math.cos(state.heading * Math.PI / 180) * step;
                 state.lng += Math.sin(state.heading * Math.PI / 180) * step;
                 
                 panorama.setPosition({ lat: state.lat, lng: state.lng });
-                panorama.setPov({ heading: state.heading, pitch: -3 });
+                // pitchを少し深くすることで路面を近くに見せる
+                panorama.setPov({ heading: state.heading, pitch: -5, zoom: 0 });
             }
 
-            // UI
-            document.getElementById('speed-num').innerText = Math.floor(state.speed);
-            document.getElementById('heading-num').innerText = Math.floor(state.heading % 360) + "°";
+            // UI反映
+            document.getElementById('speed-txt').innerText = Math.floor(state.speed);
             document.getElementById('steering-wheel').style.transform = `rotate(${state.wheel}deg)`;
 
             requestAnimationFrame(update);
